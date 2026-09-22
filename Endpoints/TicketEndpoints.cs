@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using TicketDesk.Data;
+using TicketDesk.Dtos;
 using TicketDesk.Models;
 
 namespace TicketDesk.Endpoints;
@@ -10,51 +11,56 @@ public static class TicketEndpoints
     {
         var tickets = app.MapGroup("/tickets");
 
-        // GET /tickets?status=Open&priority=High
         tickets.MapGet("/", async (AppDb db, Status? status, Priority? priority) =>
         {
             var query = db.Tickets.AsQueryable();
             if (status is not null) query = query.Where(t => t.Status == status);
             if (priority is not null) query = query.Where(t => t.Priority == priority);
-            return await query.OrderByDescending(t => t.CreatedAt).ToListAsync();
+
+            var results = await query.OrderByDescending(t => t.CreatedAt).ToListAsync();
+            return results.Select(TicketResponse.From);
         });
 
-        // GET /tickets/5
         tickets.MapGet("/{id:int}", async (int id, AppDb db) =>
             await db.Tickets.FindAsync(id) is Ticket ticket
-                ? Results.Ok(ticket)
+                ? Results.Ok(TicketResponse.From(ticket))
                 : Results.NotFound());
 
-        // POST /tickets
-        tickets.MapPost("/", async (Ticket input, AppDb db) =>
+        tickets.MapPost("/", async (CreateTicketRequest req, AppDb db) =>
         {
-            if (string.IsNullOrWhiteSpace(input.Title))
-                return Results.BadRequest("Title is required");
+            var error = Validate(req.Title, req.Priority, Status.Open);
+            if (error is not null) return Results.BadRequest(new { error });
 
-            db.Tickets.Add(input);
+            var ticket = new Ticket
+            {
+                Title = req.Title.Trim(),
+                Description = req.Description ?? "",
+                Priority = req.Priority
+            };
+
+            db.Tickets.Add(ticket);
             await db.SaveChangesAsync();
-            return Results.Created($"/tickets/{input.Id}", input);
+            return Results.Created($"/tickets/{ticket.Id}", TicketResponse.From(ticket));
         });
 
-        // PUT /tickets/5
-        tickets.MapPut("/{id:int}", async (int id, Ticket input, AppDb db) =>
+        tickets.MapPut("/{id:int}", async (int id, UpdateTicketRequest req, AppDb db) =>
         {
             var ticket = await db.Tickets.FindAsync(id);
             if (ticket is null) return Results.NotFound();
-            if (string.IsNullOrWhiteSpace(input.Title))
-                return Results.BadRequest("Title is required");
 
-            ticket.Title = input.Title;
-            ticket.Description = input.Description;
-            ticket.Priority = input.Priority;
-            ticket.Status = input.Status;
-            ticket.AssignedTo = input.AssignedTo;
+            var error = Validate(req.Title, req.Priority, req.Status);
+            if (error is not null) return Results.BadRequest(new { error });
+
+            ticket.Title = req.Title.Trim();
+            ticket.Description = req.Description ?? "";
+            ticket.Priority = req.Priority;
+            ticket.Status = req.Status;
+            ticket.AssignedTo = req.AssignedTo;
 
             await db.SaveChangesAsync();
-            return Results.Ok(ticket);
+            return Results.Ok(TicketResponse.From(ticket));
         });
 
-        // POST /tickets/5/close
         tickets.MapPost("/{id:int}/close", async (int id, AppDb db) =>
         {
             var ticket = await db.Tickets.FindAsync(id);
@@ -62,10 +68,9 @@ public static class TicketEndpoints
 
             ticket.Status = Status.Closed;
             await db.SaveChangesAsync();
-            return Results.Ok(ticket);
+            return Results.Ok(TicketResponse.From(ticket));
         });
 
-        // DELETE /tickets/5
         tickets.MapDelete("/{id:int}", async (int id, AppDb db) =>
         {
             var ticket = await db.Tickets.FindAsync(id);
@@ -75,5 +80,14 @@ public static class TicketEndpoints
             await db.SaveChangesAsync();
             return Results.NoContent();
         });
+    }
+
+    private static string? Validate(string? title, Priority priority, Status status)
+    {
+        if (string.IsNullOrWhiteSpace(title)) return "Title is required";
+        if (title.Length > 200) return "Title must be 200 characters or fewer";
+        if (!Enum.IsDefined(priority)) return "Invalid priority";
+        if (!Enum.IsDefined(status)) return "Invalid status";
+        return null;
     }
 }

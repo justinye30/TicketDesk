@@ -14,3 +14,5 @@ public record TicketResponse(
     public static TicketResponse From(Ticket t) =>
         new(t.Id, t.Title, t.Description, t.Priority, t.Status, t.AssignedTo, t.CreatedAt);
 }
+
+public record ErrorResponse(string Error);

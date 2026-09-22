@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.EntityFrameworkCore;
 using TicketDesk.Data;
 using TicketDesk.Dtos;
@@ -9,7 +10,7 @@ public static class TicketEndpoints
 {
     public static void MapTicketEndpoints(this WebApplication app)
     {
-        var tickets = app.MapGroup("/tickets");
+        var tickets = app.MapGroup("/tickets").WithTags("Tickets");
 
         tickets.MapGet("/", async (AppDb db, Status? status, Priority? priority) =>
         {
@@ -18,18 +19,20 @@ public static class TicketEndpoints
             if (priority is not null) query = query.Where(t => t.Priority == priority);
 
             var results = await query.OrderByDescending(t => t.CreatedAt).ToListAsync();
-            return results.Select(TicketResponse.From);
-        });
+            return results.Select(TicketResponse.From).ToList();
+        })
+        .WithSummary("List tickets, optionally filtered by status and priority");
 
-        tickets.MapGet("/{id:int}", async (int id, AppDb db) =>
+        tickets.MapGet("/{id:int}", async Task<Results<Ok<TicketResponse>, NotFound>> (int id, AppDb db) =>
             await db.Tickets.FindAsync(id) is Ticket ticket
-                ? Results.Ok(TicketResponse.From(ticket))
-                : Results.NotFound());
+                ? TypedResults.Ok(TicketResponse.From(ticket))
+                : TypedResults.NotFound())
+        .WithSummary("Get a ticket by id");
 
-        tickets.MapPost("/", async (CreateTicketRequest req, AppDb db) =>
+        tickets.MapPost("/", async Task<Results<Created<TicketResponse>, BadRequest<ErrorResponse>>> (CreateTicketRequest req, AppDb db) =>
         {
             var error = Validate(req.Title, req.Priority, Status.Open);
-            if (error is not null) return Results.BadRequest(new { error });
+            if (error is not null) return TypedResults.BadRequest(new ErrorResponse(error));
 
             var ticket = new Ticket
             {
@@ -40,16 +43,17 @@ public static class TicketEndpoints
 
             db.Tickets.Add(ticket);
             await db.SaveChangesAsync();
-            return Results.Created($"/tickets/{ticket.Id}", TicketResponse.From(ticket));
-        });
+            return TypedResults.Created($"/tickets/{ticket.Id}", TicketResponse.From(ticket));
+        })
+        .WithSummary("Create a ticket");
 
-        tickets.MapPut("/{id:int}", async (int id, UpdateTicketRequest req, AppDb db) =>
+        tickets.MapPut("/{id:int}", async Task<Results<Ok<TicketResponse>, NotFound, BadRequest<ErrorResponse>>> (int id, UpdateTicketRequest req, AppDb db) =>
         {
             var ticket = await db.Tickets.FindAsync(id);
-            if (ticket is null) return Results.NotFound();
+            if (ticket is null) return TypedResults.NotFound();
 
             var error = Validate(req.Title, req.Priority, req.Status);
-            if (error is not null) return Results.BadRequest(new { error });
+            if (error is not null) return TypedResults.BadRequest(new ErrorResponse(error));
 
             ticket.Title = req.Title.Trim();
             ticket.Description = req.Description ?? "";
@@ -58,28 +62,31 @@ public static class TicketEndpoints
             ticket.AssignedTo = req.AssignedTo;
 
             await db.SaveChangesAsync();
-            return Results.Ok(TicketResponse.From(ticket));
-        });
+            return TypedResults.Ok(TicketResponse.From(ticket));
+        })
+        .WithSummary("Update a ticket");
 
-        tickets.MapPost("/{id:int}/close", async (int id, AppDb db) =>
+        tickets.MapPost("/{id:int}/close", async Task<Results<Ok<TicketResponse>, NotFound>> (int id, AppDb db) =>
         {
             var ticket = await db.Tickets.FindAsync(id);
-            if (ticket is null) return Results.NotFound();
+            if (ticket is null) return TypedResults.NotFound();
 
             ticket.Status = Status.Closed;
             await db.SaveChangesAsync();
-            return Results.Ok(TicketResponse.From(ticket));
-        });
+            return TypedResults.Ok(TicketResponse.From(ticket));
+        })
+        .WithSummary("Close a ticket");
 
-        tickets.MapDelete("/{id:int}", async (int id, AppDb db) =>
+        tickets.MapDelete("/{id:int}", async Task<Results<NoContent, NotFound>> (int id, AppDb db) =>
         {
             var ticket = await db.Tickets.FindAsync(id);
-            if (ticket is null) return Results.NotFound();
+            if (ticket is null) return TypedResults.NotFound();
 
             db.Tickets.Remove(ticket);
             await db.SaveChangesAsync();
-            return Results.NoContent();
-        });
+            return TypedResults.NoContent();
+        })
+        .WithSummary("Delete a ticket");
     }
 
     private static string? Validate(string? title, Priority priority, Status status)
